@@ -192,6 +192,9 @@
       <button class="btn ghost" onclick="openSheet('payment')">Extra Payment</button>
       <button class="btn sage" onclick="openSheet('savings')">Add Savings</button>
     </div>
+    <div class="row-btns">
+      <button class="btn ghost block" onclick="openSheet('monthlySummary')">📅 Monthly Summary</button>
+    </div>
 
     <div class="section-title">Employee Due Summary</div>
     <div class="card" id="home-emp-list"></div>
@@ -341,6 +344,14 @@
   <button class="btn sage block" onclick="submitBudgetGoal()">Add</button>
 </div>
 
+<div class="sheet" id="sheet-monthlySummary" style="max-height:90vh;">
+  <button class="close" onclick="closeSheet()">×</button>
+  <h2>Monthly Summary</h2>
+  <label>Month</label>
+  <input id="ms-month" type="month" onchange="renderMonthlySummary()">
+  <div id="ms-results"></div>
+</div>
+
 <script>
 let state = { employees: [], salaryTx: [], savingsTx: [], budgetGoals: [] };
 let activeEmployeeId = null;
@@ -381,6 +392,10 @@ function openSheet(name){
   const dateFields = {dailyEntry:'de-date', advance:'av-date', payment:'pm-date', savings:'sv-date'};
   if(dateFields[name]) document.getElementById(dateFields[name]).value = todayStr();
   if(name==='budgetGoal') document.getElementById('bg-month').value = new Date().toISOString().slice(0,7);
+  if(name==='monthlySummary'){
+    document.getElementById('ms-month').value = new Date().toISOString().slice(0,7);
+    renderMonthlySummary();
+  }
   if(name==='addEmployee'){
     document.getElementById('ae-title').textContent = 'New Employee';
     document.getElementById('ae-submit-btn').textContent = 'Add';
@@ -678,6 +693,63 @@ function renderSavings(){
         </div>
       </div>`).join('');
   }
+}
+
+function renderMonthlySummary(){
+  const month = document.getElementById('ms-month').value;
+  const wrap = document.getElementById('ms-results');
+  if(!month){ wrap.innerHTML=''; return; }
+
+  // Salary side
+  const empRows = state.employees.map(e=>{
+    const tx = state.salaryTx.filter(t=>t.empId===e.id && t.date.slice(0,7)===month);
+    const days = tx.filter(t=>t.type==='attendance').reduce((s,t)=>s+Number(t.days),0);
+    const earned = days * Number(e.dailyWage);
+    const advGiven = tx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
+    const paid = tx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
+    return {name:e.name, days, earned, advGiven, paid};
+  }).filter(r=>r.days>0||r.advGiven>0||r.paid>0);
+
+  const totalEarned = empRows.reduce((s,r)=>s+r.earned,0);
+  const totalPaid = empRows.reduce((s,r)=>s+r.paid,0);
+  const totalAdv = empRows.reduce((s,r)=>s+r.advGiven,0);
+
+  // Savings side
+  const savTx = state.savingsTx.filter(t=>t.date.slice(0,7)===month);
+  const dep = savTx.filter(t=>t.type==='deposit').reduce((s,t)=>s+Number(t.amount),0);
+  const wd = savTx.filter(t=>t.type==='withdrawal').reduce((s,t)=>s+Number(t.amount),0);
+  const gold = savTx.filter(t=>t.type==='gold').reduce((s,t)=>s+Number(t.amount),0);
+  const inv = savTx.filter(t=>t.type==='investment').reduce((s,t)=>s+Number(t.amount),0);
+
+  wrap.innerHTML = `
+    <div class="section-title" style="margin-top:16px;">Salary — ${month}</div>
+    <div class="card">
+      <div class="stat-row">
+        <div class="stat gold"><div class="label">Total Earned</div><div class="value mono">${fmt(totalEarned)}</div></div>
+        <div class="stat"><div class="label">Total Paid</div><div class="value mono">${fmt(totalPaid)}</div></div>
+      </div>
+      <div class="stat-row" style="margin-top:8px;">
+        <div class="stat rust"><div class="label">Advance Given</div><div class="value mono">${fmt(totalAdv)}</div></div>
+      </div>
+      ${empRows.length===0?'<div class="empty">No activity this month</div>':empRows.map(r=>`
+        <div class="list-item">
+          <div><div class="name" style="font-size:13.5px;">${r.name}</div><div class="meta">${r.days} days • earned ${fmt(r.earned)}</div></div>
+          <div class="amt mono" style="font-size:13px;">${fmt(r.paid)} paid</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="section-title">Savings — ${month}</div>
+    <div class="card">
+      <div class="stat-row">
+        <div class="stat sage"><div class="label">Deposited</div><div class="value mono">${fmt(dep)}</div></div>
+        <div class="stat rust"><div class="label">Withdrawn</div><div class="value mono">${fmt(wd)}</div></div>
+      </div>
+      <div class="stat-row" style="margin-top:8px;">
+        <div class="stat gold"><div class="label">Gold</div><div class="value mono">${fmt(gold)}</div></div>
+        <div class="stat"><div class="label">Investment</div><div class="value mono">${fmt(inv)}</div></div>
+      </div>
+    </div>
+  `;
 }
 
 init();
