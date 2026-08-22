@@ -256,11 +256,11 @@
   <h2 id="ae-title">New Employee</h2>
   <label>Name</label>
   <input id="ne-name" placeholder="Name">
-  <label>Daily Wage (₹)</label>
+  <label>Daily Wage (₹) <span style="font-weight:400;color:var(--ink-soft);">— reference only</span></label>
   <input id="ne-wage" type="number" placeholder="500">
-  <label>Usual Cash Given Per Day (₹)</label>
-  <input id="ne-cash" type="number" placeholder="Leave blank = full wage">
-  <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">If they have an advance, the rest of the wage is auto-held against it each day.</div>
+  <label>Holdback Amount (பிடிதர தொகை) (₹)</label>
+  <input id="ne-cash" type="number" placeholder="Leave blank = 0 (no holdback)">
+  <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">Fixed amount held back each work day toward their advance, only while they have advance due. Rest of that day's cash goes to them.</div>
   <input type="hidden" id="ne-edit-id">
   <button class="btn gold block" onclick="submitAddEmployee()" id="ae-submit-btn">Add</button>
 </div>
@@ -268,24 +268,23 @@
 <div class="sheet" id="sheet-dailyEntry">
   <button class="close" onclick="closeSheet()">×</button>
   <h2>Daily Entry</h2>
+  <div id="de-edit-note" style="display:none;font-size:11.5px;color:var(--gold-deep);font-weight:700;margin-bottom:8px;">✎ Editing the existing entry for this date</div>
   <label>Employee</label>
-  <select id="de-emp" onchange="updateDailyCashSuggestion()"></select>
+  <select id="de-emp" onchange="loadExistingOrDefault()"></select>
   <label>Date</label>
-  <input id="de-date" type="date">
-  <label>Work Days</label>
-  <select id="de-days" onchange="updateDailyCashSuggestion()">
+  <input id="de-date" type="date" onchange="loadExistingOrDefault()">
+  <label>Attendance</label>
+  <select id="de-days" onchange="onDaysChange()">
     <option value="1">Full Day (1)</option>
     <option value="0.5">Half Day (0.5)</option>
     <option value="1.5">1.5 Days</option>
     <option value="2">2 Days</option>
     <option value="0">Leave (absent)</option>
   </select>
-  <label>Custom Amount for Partial Hours (₹) <span style="font-weight:400;color:var(--ink-soft);">— optional</span></label>
-  <input id="de-override" type="number" placeholder="Leave blank for full day rate" oninput="updateDailyCashSuggestion()">
-  <div style="font-size:11px;color:var(--ink-soft);margin:-6px 0 12px;">Use this if they worked only a few hours and you're paying a fixed amount instead of the full day rate. If they have advance due, only their usual daily deduction is held back — not more.</div>
   <label>Cash Given Today (₹)</label>
-  <input id="de-cash" type="number">
-  <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">Auto-filled from their usual amount. Change it if you're paying full salary today.</div>
+  <input id="de-cash" type="number" oninput="updateEarnedPreview()">
+  <div id="de-earned-preview" style="font-size:12.5px;color:var(--gold-deep);font-weight:700;margin:-6px 0 10px;"></div>
+  <div style="font-size:11px;color:var(--ink-soft);margin:-2px 0 12px;">If they have advance due, their fixed holdback amount is added on top of this cash to work out today's earning — the holdback stays with you toward the advance.</div>
   <button class="btn gold block" onclick="submitDailyEntry()">Add</button>
 </div>
 
@@ -425,7 +424,7 @@ function openSheet(name){
     document.getElementById('ne-cash').value = '';
   }
   if(['dailyEntry','advance','payment'].includes(name)){ populateEmployeeSelect(name); }
-  if(name==='dailyEntry'){ document.getElementById('de-override').value=''; updateDailyCashSuggestion(); }
+  if(name==='dailyEntry'){ loadExistingOrDefault(); }
 }
 function closeSheet(){
   document.getElementById('overlay').classList.remove('active');
@@ -437,30 +436,53 @@ function populateEmployeeSelect(name){
   sel.innerHTML = state.employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('') || '<option value="">No employees</option>';
   if(activeEmployeeId) sel.value = activeEmployeeId;
 }
-function updateDailyCashSuggestion(){
+function getHoldback(emp){
+  if(!emp) return 0;
+  if(emp.holdback!=null && emp.holdback!=='') return Number(emp.holdback);
+  if(emp.dailyCash!=null && emp.dailyCash!=='') return Math.max(0, Number(emp.dailyWage) - Number(emp.dailyCash));
+  return 0;
+}
+function loadExistingOrDefault(){
   const empId = document.getElementById('de-emp').value;
-  const days = Number(document.getElementById('de-days').value);
+  const date = document.getElementById('de-date').value;
   const emp = state.employees.find(e=>e.id===empId);
-  if(!emp) return;
-  const dailyCashVal = (emp.dailyCash!=null && emp.dailyCash!=='') ? Number(emp.dailyCash) : Number(emp.dailyWage);
-  const overrideRaw = document.getElementById('de-override').value;
-
-  if(overrideRaw!==''){
-    const earnedAmt = Number(overrideRaw);
+  if(!emp || !date){ return; }
+  const existingAtt = state.salaryTx.find(t=>t.type==='attendance' && t.empId===empId && t.date===date);
+  const existingPay = state.salaryTx.find(t=>t.type==='payment' && t.empId===empId && t.date===date && t.source==='dailyEntry');
+  if(existingAtt){
+    document.getElementById('de-days').value = existingAtt.days;
+    document.getElementById('de-cash').value = existingPay ? existingPay.amount : 0;
+    document.getElementById('de-edit-note').style.display = 'block';
+  } else {
+    document.getElementById('de-days').value = '1';
+    const holdback = getHoldback(emp);
+    const suggestedCash = Math.max(0, Number(emp.dailyWage||0) - holdback);
+    document.getElementById('de-cash').value = suggestedCash || '';
+    document.getElementById('de-edit-note').style.display = 'none';
+  }
+  updateEarnedPreview();
+}
+function onDaysChange(){
+  const days = Number(document.getElementById('de-days').value);
+  if(days===0){ document.getElementById('de-cash').value = 0; }
+  updateEarnedPreview();
+}
+function updateEarnedPreview(){
+  const empId = document.getElementById('de-emp').value;
+  const emp = state.employees.find(e=>e.id===empId);
+  const preview = document.getElementById('de-earned-preview');
+  if(!emp){ preview.textContent=''; return; }
+  const days = Number(document.getElementById('de-days').value);
+  const cash = Number(document.getElementById('de-cash').value || 0);
+  let earned;
+  if(days===0){ earned = 0; }
+  else {
     const ledger = employeeLedger(empId);
     const hasAdvanceDue = ledger && ledger.due < 0;
-    const deductionPerDay = Math.max(0, Number(emp.dailyWage) - dailyCashVal);
-    let cash;
-    if(hasAdvanceDue && deductionPerDay>0){
-      const held = Math.min(earnedAmt, deductionPerDay);
-      cash = earnedAmt - held;
-    } else {
-      cash = earnedAmt;
-    }
-    document.getElementById('de-cash').value = Math.round(cash);
-  } else {
-    document.getElementById('de-cash').value = Math.round(dailyCashVal * days);
+    const holdback = getHoldback(emp);
+    earned = (hasAdvanceDue && holdback>0) ? (cash + holdback) : cash;
   }
+  preview.textContent = days===0 ? 'Leave — no earning recorded' : `Will record as Earned: ${fmt(earned)}${(earned>cash)?` (₹${Math.round(earned-cash)} held toward advance)`:''}`;
 }
 function selectPill(el){
   document.querySelectorAll('#sav-type-pills .pill').forEach(p=>p.classList.remove('active'));
@@ -485,14 +507,14 @@ function submitAddEmployee(){
   const name = document.getElementById('ne-name').value.trim();
   const wage = Number(document.getElementById('ne-wage').value);
   const cashVal = document.getElementById('ne-cash').value;
-  const dailyCash = cashVal===''? null : Number(cashVal);
+  const holdback = cashVal===''? 0 : Number(cashVal);
   const editId = document.getElementById('ne-edit-id').value;
   if(!name || !wage){ alert('Please enter name and wage'); return; }
   if(editId){
     const emp = state.employees.find(e=>e.id===editId);
-    emp.name = name; emp.dailyWage = wage; emp.dailyCash = dailyCash;
+    emp.name = name; emp.dailyWage = wage; emp.holdback = holdback;
   } else {
-    state.employees.push({id:uid(), name, dailyWage:wage, dailyCash});
+    state.employees.push({id:uid(), name, dailyWage:wage, holdback});
   }
   saveKey('employees', state.employees);
   document.getElementById('ne-name').value='';
@@ -511,20 +533,34 @@ function openEditEmployee(id){
   document.getElementById('ne-edit-id').value = id;
   document.getElementById('ne-name').value = emp.name;
   document.getElementById('ne-wage').value = emp.dailyWage;
-  document.getElementById('ne-cash').value = (emp.dailyCash!=null) ? emp.dailyCash : '';
+  document.getElementById('ne-cash').value = getHoldback(emp) || '';
 }
 function submitDailyEntry(){
   const empId = document.getElementById('de-emp').value;
   const date = document.getElementById('de-date').value;
   const days = document.getElementById('de-days').value;
-  const overrideRaw = document.getElementById('de-override').value;
-  const customAmount = overrideRaw!=='' ? Number(overrideRaw) : null;
   const cash = Number(document.getElementById('de-cash').value || 0);
-  if(!empId||!date){ alert('Please fill required fields'); return; }
-  state.salaryTx.push({id:uid(), type:'attendance', empId, date, days, customAmount});
-  if(cash>0){ state.salaryTx.push({id:uid(), type:'payment', empId, date, amount:cash, mode:'Cash'}); }
+  const emp = state.employees.find(e=>e.id===empId);
+  if(!empId||!date||!emp){ alert('Please fill required fields'); return; }
+
+  const ledger = employeeLedger(empId);
+  const hasAdvanceDue = ledger && ledger.due < 0;
+  const holdback = getHoldback(emp);
+  const earned = (Number(days)===0) ? 0 : ((hasAdvanceDue && holdback>0) ? (cash+holdback) : cash);
+
+  const existingAtt = state.salaryTx.find(t=>t.type==='attendance' && t.empId===empId && t.date===date);
+  if(existingAtt){ existingAtt.days = days; existingAtt.customAmount = earned; }
+  else { state.salaryTx.push({id:uid(), type:'attendance', empId, date, days, customAmount:earned}); }
+
+  const existingPay = state.salaryTx.find(t=>t.type==='payment' && t.empId===empId && t.date===date && t.source==='dailyEntry');
+  if(cash>0){
+    if(existingPay){ existingPay.amount = cash; }
+    else { state.salaryTx.push({id:uid(), type:'payment', empId, date, amount:cash, mode:'Cash', source:'dailyEntry'}); }
+  } else if(existingPay){
+    state.salaryTx = state.salaryTx.filter(t=>t.id!==existingPay.id);
+  }
+
   saveKey('salary_transactions', state.salaryTx);
-  document.getElementById('de-override').value='';
   closeSheet(); renderAll();
   if(activeEmployeeId===empId){ renderEmployeeDetail(empId); }
 }
@@ -545,7 +581,7 @@ function submitPayment(){
   const amount = Number(document.getElementById('pm-amt').value);
   const mode = document.getElementById('pm-mode').value;
   if(!empId||!amount){ alert('Please fill required fields'); return; }
-  state.salaryTx.push({id:uid(), type:'payment', empId, date, amount, mode});
+  state.salaryTx.push({id:uid(), type:'payment', empId, date, amount, mode, source:'extra'});
   saveKey('salary_transactions', state.salaryTx);
   document.getElementById('pm-amt').value='';
   closeSheet(); renderAll();
@@ -663,7 +699,7 @@ function renderEmployeeDetail(id){
         <button class="btn ghost sm" onclick="openEditEmployee('${id}')">✎ Edit</button>
         <button class="btn ghost sm" onclick="deleteEmployee('${id}')">Delete</button>
       </div></div>
-      <div class="meta" style="margin-bottom:8px;">₹${l.emp.dailyWage}/day wage • usual cash/day: ${fmt((l.emp.dailyCash!=null)?l.emp.dailyCash:l.emp.dailyWage)}</div>
+      <div class="meta" style="margin-bottom:8px;">₹${l.emp.dailyWage}/day wage • holdback (பிடிதர தொகை): ${fmt(getHoldback(l.emp))}</div>
       <div class="stat-row">
         <div class="stat"><div class="label">Work Days</div><div class="value mono">${l.daysWorked}</div></div>
         <div class="stat gold"><div class="label">Earned</div><div class="value mono">${fmt(l.earned)}</div></div>
@@ -686,9 +722,11 @@ function renderEmployeeDetail(id){
       ${txSorted.length===0?'<div class="empty">No records yet</div>':txSorted.map(t=>{
         let label='', amt='';
         if(t.type==='attendance'){
-          if(t.customAmount!=null){ label = `✦ Partial (custom amount)`; amt = fmt(t.customAmount); }
-          else if(Number(t.days)===0){ label = '🚫 Leave (absent)'; amt = fmt(0); }
-          else { label = `✓ Work Day — ${t.days} day(s)`; amt = fmt(t.days*l.emp.dailyWage); }
+          if(Number(t.days)===0){ label = '🚫 Leave (absent)'; amt = fmt(0); }
+          else {
+            const earnedVal = (t.customAmount!=null) ? Number(t.customAmount) : Number(t.days)*Number(l.emp.dailyWage);
+            label = `✓ Work Day — ${t.days} day(s)`; amt = fmt(earnedVal);
+          }
         }
         if(t.type==='advance'){ label=`Advance${t.note?' — '+t.note:''}`; amt=fmt(t.amount); }
         if(t.type==='payment'){ label=`Payment (${t.mode})`; amt=fmt(t.amount); }
