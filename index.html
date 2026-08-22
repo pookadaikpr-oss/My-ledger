@@ -195,6 +195,9 @@
     <div class="row-btns">
       <button class="btn ghost block" onclick="openSheet('monthlySummary')">📅 Monthly Summary</button>
     </div>
+    <div class="row-btns">
+      <button class="btn ghost block" onclick="openSheet('backup')">💾 Backup / Restore</button>
+    </div>
 
     <div class="section-title">Employee Due Summary</div>
     <div class="card" id="home-emp-list"></div>
@@ -350,6 +353,19 @@
   <label>Month</label>
   <input id="ms-month" type="month" onchange="renderMonthlySummary()">
   <div id="ms-results"></div>
+</div>
+
+<div class="sheet" id="sheet-backup">
+  <button class="close" onclick="closeSheet()">×</button>
+  <h2>Backup / Restore</h2>
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:14px;">Your data is saved only on this phone's browser. Export a backup file regularly and save it to WhatsApp, Google Drive, or Files — so you don't lose it if the browser data is ever cleared.</div>
+
+  <div class="section-title" style="margin:0 0 8px;">Export</div>
+  <button class="btn gold block" onclick="exportBackup()">⬇ Download Backup File</button>
+
+  <div class="section-title" style="margin:20px 0 8px;">Restore</div>
+  <div style="font-size:12px;color:var(--ink-soft);margin-bottom:8px;">Choose a previously exported backup file. This will replace all current data.</div>
+  <input type="file" id="restore-file" accept="application/json" onchange="importBackup(event)">
 </div>
 
 <script>
@@ -707,8 +723,9 @@ function renderMonthlySummary(){
     const earned = days * Number(e.dailyWage);
     const advGiven = tx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
     const paid = tx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
-    return {name:e.name, days, earned, advGiven, paid};
-  }).filter(r=>r.days>0||r.advGiven>0||r.paid>0);
+    const runningDue = employeeLedger(e.id).due;
+    return {name:e.name, days, earned, advGiven, paid, runningDue};
+  });
 
   const totalEarned = empRows.reduce((s,r)=>s+r.earned,0);
   const totalPaid = empRows.reduce((s,r)=>s+r.paid,0);
@@ -731,10 +748,13 @@ function renderMonthlySummary(){
       <div class="stat-row" style="margin-top:8px;">
         <div class="stat rust"><div class="label">Advance Given</div><div class="value mono">${fmt(totalAdv)}</div></div>
       </div>
-      ${empRows.length===0?'<div class="empty">No activity this month</div>':empRows.map(r=>`
+      ${empRows.length===0?'<div class="empty">No employees yet</div>':empRows.map(r=>`
         <div class="list-item">
-          <div><div class="name" style="font-size:13.5px;">${r.name}</div><div class="meta">${r.days} days • earned ${fmt(r.earned)}</div></div>
-          <div class="amt mono" style="font-size:13px;">${fmt(r.paid)} paid</div>
+          <div><div class="name" style="font-size:13.5px;">${r.name}</div><div class="meta">${r.days} days this month • earned ${fmt(r.earned)}${r.advGiven>0?' • advance +'+fmt(r.advGiven):''}</div></div>
+          <div style="text-align:right;">
+            <div class="amt mono" style="font-size:13px;">${fmt(r.paid)} paid</div>
+            <div class="meta ${r.runningDue>0?'due':''}" style="margin-top:2px;">due: ${fmt(r.runningDue)}</div>
+          </div>
         </div>`).join('')}
     </div>
 
@@ -750,6 +770,52 @@ function renderMonthlySummary(){
       </div>
     </div>
   `;
+}
+
+function exportBackup(){
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    employees: state.employees,
+    salary_transactions: state.salaryTx,
+    savings_transactions: state.savingsTx,
+    budget_goals: state.budgetGoals
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const dateStr = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `my-ledger-backup-${dateStr}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function importBackup(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e){
+    try{
+      const data = JSON.parse(e.target.result);
+      if(!data.employees || !data.salary_transactions){ alert('This is not a valid backup file'); return; }
+      if(!confirm('This will replace all current data with the backup file data. Continue?')) return;
+      state.employees = data.employees || [];
+      state.salaryTx = data.salary_transactions || [];
+      state.savingsTx = data.savings_transactions || [];
+      state.budgetGoals = data.budget_goals || [];
+      await saveKey('employees', state.employees);
+      await saveKey('salary_transactions', state.salaryTx);
+      await saveKey('savings_transactions', state.savingsTx);
+      await saveKey('budget_goals', state.budgetGoals);
+      closeSheet(); renderAll();
+      alert('Restored successfully!');
+    }catch(err){
+      alert('Could not read file. Please choose a valid backup file.');
+    }
+    document.getElementById('restore-file').value = '';
+  };
+  reader.readAsText(file);
 }
 
 init();
