@@ -187,9 +187,9 @@
 
     <div class="section-title">Quick Add</div>
     <div class="row-btns">
-      <button class="btn gold" onclick="openSheet('attendance')">✓ Work Day</button>
+      <button class="btn gold" onclick="openSheet('dailyEntry')">✓ Daily Entry</button>
       <button class="btn ghost" onclick="openSheet('advance')">Advance</button>
-      <button class="btn ghost" onclick="openSheet('payment')">Salary Payment</button>
+      <button class="btn ghost" onclick="openSheet('payment')">Extra Payment</button>
       <button class="btn sage" onclick="openSheet('savings')">Add Savings</button>
     </div>
 
@@ -247,29 +247,36 @@
 <!-- Sheets -->
 <div class="sheet" id="sheet-addEmployee">
   <button class="close" onclick="closeSheet()">×</button>
-  <h2>New Employee</h2>
+  <h2 id="ae-title">New Employee</h2>
   <label>Name</label>
   <input id="ne-name" placeholder="Name">
   <label>Daily Wage (₹)</label>
   <input id="ne-wage" type="number" placeholder="500">
-  <button class="btn gold block" onclick="submitAddEmployee()">Add</button>
+  <label>Usual Cash Given Per Day (₹)</label>
+  <input id="ne-cash" type="number" placeholder="Leave blank = full wage">
+  <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">If they have an advance, the rest of the wage is auto-held against it each day.</div>
+  <input type="hidden" id="ne-edit-id">
+  <button class="btn gold block" onclick="submitAddEmployee()" id="ae-submit-btn">Add</button>
 </div>
 
-<div class="sheet" id="sheet-attendance">
+<div class="sheet" id="sheet-dailyEntry">
   <button class="close" onclick="closeSheet()">×</button>
-  <h2>Work Day Entry</h2>
+  <h2>Daily Entry</h2>
   <label>Employee</label>
-  <select id="at-emp"></select>
+  <select id="de-emp" onchange="updateDailyCashSuggestion()"></select>
   <label>Date</label>
-  <input id="at-date" type="date">
+  <input id="de-date" type="date">
   <label>Work Days</label>
-  <select id="at-days">
+  <select id="de-days" onchange="updateDailyCashSuggestion()">
     <option value="1">Full Day (1)</option>
     <option value="0.5">Half Day (0.5)</option>
     <option value="1.5">1.5 Days</option>
     <option value="2">2 Days</option>
   </select>
-  <button class="btn gold block" onclick="submitAttendance()">Add</button>
+  <label>Cash Given Today (₹)</label>
+  <input id="de-cash" type="number">
+  <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">Auto-filled from their usual amount. Change it if you're paying full salary today.</div>
+  <button class="btn gold block" onclick="submitDailyEntry()">Add</button>
 </div>
 
 <div class="sheet" id="sheet-advance">
@@ -288,7 +295,8 @@
 
 <div class="sheet" id="sheet-payment">
   <button class="close" onclick="closeSheet()">×</button>
-  <h2>Salary Payment</h2>
+  <h2>Extra Payment</h2>
+  <div style="font-size:11.5px;color:var(--ink-soft);margin:-8px 0 12px;">Use this for one-off payments not tied to a work day (e.g. bulk due settlement).</div>
   <label>Employee</label>
   <select id="pm-emp"></select>
   <label>Date</label>
@@ -370,20 +378,38 @@ function switchTab(tab){
 function openSheet(name){
   document.getElementById('overlay').classList.add('active');
   document.getElementById('sheet-'+name).classList.add('active');
-  const dateFields = {attendance:'at-date', advance:'av-date', payment:'pm-date', savings:'sv-date'};
+  const dateFields = {dailyEntry:'de-date', advance:'av-date', payment:'pm-date', savings:'sv-date'};
   if(dateFields[name]) document.getElementById(dateFields[name]).value = todayStr();
   if(name==='budgetGoal') document.getElementById('bg-month').value = new Date().toISOString().slice(0,7);
-  if(['attendance','advance','payment'].includes(name)) populateEmployeeSelect(name);
+  if(name==='addEmployee'){
+    document.getElementById('ae-title').textContent = 'New Employee';
+    document.getElementById('ae-submit-btn').textContent = 'Add';
+    document.getElementById('ne-edit-id').value = '';
+    document.getElementById('ne-name').value = '';
+    document.getElementById('ne-wage').value = '';
+    document.getElementById('ne-cash').value = '';
+  }
+  if(['dailyEntry','advance','payment'].includes(name)){ populateEmployeeSelect(name); }
+  if(name==='dailyEntry'){ updateDailyCashSuggestion(); }
 }
 function closeSheet(){
   document.getElementById('overlay').classList.remove('active');
   document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('active'));
 }
 function populateEmployeeSelect(name){
-  const map = {attendance:'at-emp', advance:'av-emp', payment:'pm-emp'};
+  const map = {dailyEntry:'de-emp', advance:'av-emp', payment:'pm-emp'};
   const sel = document.getElementById(map[name]);
   sel.innerHTML = state.employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('') || '<option value="">No employees</option>';
   if(activeEmployeeId) sel.value = activeEmployeeId;
+}
+function updateDailyCashSuggestion(){
+  const empId = document.getElementById('de-emp').value;
+  const days = Number(document.getElementById('de-days').value);
+  const emp = state.employees.find(e=>e.id===empId);
+  if(emp){
+    const cashPerDay = (emp.dailyCash!=null && emp.dailyCash!=='') ? Number(emp.dailyCash) : Number(emp.dailyWage);
+    document.getElementById('de-cash').value = Math.round(cashPerDay * days);
+  }
 }
 function selectPill(el){
   document.querySelectorAll('#sav-type-pills .pill').forEach(p=>p.classList.remove('active'));
@@ -407,21 +433,46 @@ function employeeLedger(empId){
 function submitAddEmployee(){
   const name = document.getElementById('ne-name').value.trim();
   const wage = Number(document.getElementById('ne-wage').value);
+  const cashVal = document.getElementById('ne-cash').value;
+  const dailyCash = cashVal===''? null : Number(cashVal);
+  const editId = document.getElementById('ne-edit-id').value;
   if(!name || !wage){ alert('Please enter name and wage'); return; }
-  state.employees.push({id:uid(), name, dailyWage:wage});
+  if(editId){
+    const emp = state.employees.find(e=>e.id===editId);
+    emp.name = name; emp.dailyWage = wage; emp.dailyCash = dailyCash;
+  } else {
+    state.employees.push({id:uid(), name, dailyWage:wage, dailyCash});
+  }
   saveKey('employees', state.employees);
   document.getElementById('ne-name').value='';
   document.getElementById('ne-wage').value='';
+  document.getElementById('ne-cash').value='';
+  document.getElementById('ne-edit-id').value='';
   closeSheet(); renderAll();
+  if(editId && activeEmployeeId===editId){ renderEmployeeDetail(editId); }
 }
-function submitAttendance(){
-  const empId = document.getElementById('at-emp').value;
-  const date = document.getElementById('at-date').value;
-  const days = document.getElementById('at-days').value;
+function openEditEmployee(id){
+  const emp = state.employees.find(e=>e.id===id);
+  if(!emp) return;
+  openSheet('addEmployee');
+  document.getElementById('ae-title').textContent = 'Edit Employee';
+  document.getElementById('ae-submit-btn').textContent = 'Save';
+  document.getElementById('ne-edit-id').value = id;
+  document.getElementById('ne-name').value = emp.name;
+  document.getElementById('ne-wage').value = emp.dailyWage;
+  document.getElementById('ne-cash').value = (emp.dailyCash!=null) ? emp.dailyCash : '';
+}
+function submitDailyEntry(){
+  const empId = document.getElementById('de-emp').value;
+  const date = document.getElementById('de-date').value;
+  const days = document.getElementById('de-days').value;
+  const cash = Number(document.getElementById('de-cash').value || 0);
   if(!empId||!date){ alert('Please fill required fields'); return; }
   state.salaryTx.push({id:uid(), type:'attendance', empId, date, days});
+  if(cash>0){ state.salaryTx.push({id:uid(), type:'payment', empId, date, amount:cash, mode:'Cash'}); }
   saveKey('salary_transactions', state.salaryTx);
   closeSheet(); renderAll();
+  if(activeEmployeeId===empId){ renderEmployeeDetail(empId); }
 }
 function submitAdvance(){
   const empId = document.getElementById('av-emp').value;
@@ -553,7 +604,11 @@ function renderEmployeeDetail(id){
     <button class="back" onclick="showEmployeeList()">← Employee List</button>
     <div class="card">
       <div class="emp-head"><h3 style="margin:0;text-transform:none;font-size:16px;color:var(--ink);">${l.emp.name}</h3>
-      <button class="btn ghost sm" onclick="deleteEmployee('${id}')">Delete</button></div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn ghost sm" onclick="openEditEmployee('${id}')">✎ Edit</button>
+        <button class="btn ghost sm" onclick="deleteEmployee('${id}')">Delete</button>
+      </div></div>
+      <div class="meta" style="margin-bottom:8px;">₹${l.emp.dailyWage}/day wage • usual cash/day: ${fmt((l.emp.dailyCash!=null)?l.emp.dailyCash:l.emp.dailyWage)}</div>
       <div class="stat-row">
         <div class="stat"><div class="label">Work Days</div><div class="value mono">${l.daysWorked}</div></div>
         <div class="stat gold"><div class="label">Earned</div><div class="value mono">${fmt(l.earned)}</div></div>
@@ -566,9 +621,9 @@ function renderEmployeeDetail(id){
         <div class="stat ${l.due>0?'rust':'sage'}"><div class="label">Due</div><div class="value mono">${fmt(l.due)}</div></div>
       </div>
       <div class="row-btns">
-        <button class="btn gold sm" onclick="openSheet('attendance')">✓ Work Day</button>
+        <button class="btn gold sm" onclick="openSheet('dailyEntry')">✓ Daily Entry</button>
         <button class="btn ghost sm" onclick="openSheet('advance')">Advance</button>
-        <button class="btn ghost sm" onclick="openSheet('payment')">Payment</button>
+        <button class="btn ghost sm" onclick="openSheet('payment')">Extra Payment</button>
       </div>
     </div>
     <div class="section-title">Transaction History</div>
