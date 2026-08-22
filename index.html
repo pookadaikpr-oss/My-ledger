@@ -523,6 +523,7 @@ function deleteTx(kind, id){
   if(kind==='savings'){ state.savingsTx = state.savingsTx.filter(t=>t.id!==id); saveKey('savings_transactions', state.savingsTx); }
   if(kind==='goal'){ state.budgetGoals = state.budgetGoals.filter(t=>t.id!==id); saveKey('budget_goals', state.budgetGoals); }
   renderAll();
+  if(kind==='salary' && activeEmployeeId){ renderEmployeeDetail(activeEmployeeId); }
 }
 function deleteEmployee(id){
   if(!confirm('Delete this employee? All their records will be removed.')) return;
