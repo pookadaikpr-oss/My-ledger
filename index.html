@@ -278,7 +278,11 @@
     <option value="0.5">Half Day (0.5)</option>
     <option value="1.5">1.5 Days</option>
     <option value="2">2 Days</option>
+    <option value="0">Leave (absent)</option>
   </select>
+  <label>Custom Amount for Partial Hours (₹) <span style="font-weight:400;color:var(--ink-soft);">— optional</span></label>
+  <input id="de-override" type="number" placeholder="Leave blank for full day rate" oninput="updateDailyCashSuggestion()">
+  <div style="font-size:11px;color:var(--ink-soft);margin:-6px 0 12px;">Use this if they worked only a few hours and you're paying a fixed amount instead of the full day rate. If they have advance due, only their usual daily deduction is held back — not more.</div>
   <label>Cash Given Today (₹)</label>
   <input id="de-cash" type="number">
   <div style="font-size:11.5px;color:var(--ink-soft);margin:-6px 0 12px;">Auto-filled from their usual amount. Change it if you're paying full salary today.</div>
@@ -421,7 +425,7 @@ function openSheet(name){
     document.getElementById('ne-cash').value = '';
   }
   if(['dailyEntry','advance','payment'].includes(name)){ populateEmployeeSelect(name); }
-  if(name==='dailyEntry'){ updateDailyCashSuggestion(); }
+  if(name==='dailyEntry'){ document.getElementById('de-override').value=''; updateDailyCashSuggestion(); }
 }
 function closeSheet(){
   document.getElementById('overlay').classList.remove('active');
@@ -437,9 +441,25 @@ function updateDailyCashSuggestion(){
   const empId = document.getElementById('de-emp').value;
   const days = Number(document.getElementById('de-days').value);
   const emp = state.employees.find(e=>e.id===empId);
-  if(emp){
-    const cashPerDay = (emp.dailyCash!=null && emp.dailyCash!=='') ? Number(emp.dailyCash) : Number(emp.dailyWage);
-    document.getElementById('de-cash').value = Math.round(cashPerDay * days);
+  if(!emp) return;
+  const dailyCashVal = (emp.dailyCash!=null && emp.dailyCash!=='') ? Number(emp.dailyCash) : Number(emp.dailyWage);
+  const overrideRaw = document.getElementById('de-override').value;
+
+  if(overrideRaw!==''){
+    const earnedAmt = Number(overrideRaw);
+    const ledger = employeeLedger(empId);
+    const hasAdvanceDue = ledger && ledger.due < 0;
+    const deductionPerDay = Math.max(0, Number(emp.dailyWage) - dailyCashVal);
+    let cash;
+    if(hasAdvanceDue && deductionPerDay>0){
+      const held = Math.min(earnedAmt, deductionPerDay);
+      cash = earnedAmt - held;
+    } else {
+      cash = earnedAmt;
+    }
+    document.getElementById('de-cash').value = Math.round(cash);
+  } else {
+    document.getElementById('de-cash').value = Math.round(dailyCashVal * days);
   }
 }
 function selectPill(el){
@@ -454,7 +474,7 @@ function employeeLedger(empId){
   if(!emp) return null;
   const tx = state.salaryTx.filter(t=>t.empId===empId);
   const daysWorked = tx.filter(t=>t.type==='attendance').reduce((s,t)=>s+Number(t.days),0);
-  const earned = daysWorked * Number(emp.dailyWage);
+  const earned = tx.filter(t=>t.type==='attendance').reduce((s,t)=> s + (t.customAmount!=null ? Number(t.customAmount) : Number(t.days)*Number(emp.dailyWage)), 0);
   const advances = tx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
   const paid = tx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
   const due = earned - advances - paid;
@@ -497,11 +517,14 @@ function submitDailyEntry(){
   const empId = document.getElementById('de-emp').value;
   const date = document.getElementById('de-date').value;
   const days = document.getElementById('de-days').value;
+  const overrideRaw = document.getElementById('de-override').value;
+  const customAmount = overrideRaw!=='' ? Number(overrideRaw) : null;
   const cash = Number(document.getElementById('de-cash').value || 0);
   if(!empId||!date){ alert('Please fill required fields'); return; }
-  state.salaryTx.push({id:uid(), type:'attendance', empId, date, days});
+  state.salaryTx.push({id:uid(), type:'attendance', empId, date, days, customAmount});
   if(cash>0){ state.salaryTx.push({id:uid(), type:'payment', empId, date, amount:cash, mode:'Cash'}); }
   saveKey('salary_transactions', state.salaryTx);
+  document.getElementById('de-override').value='';
   closeSheet(); renderAll();
   if(activeEmployeeId===empId){ renderEmployeeDetail(empId); }
 }
@@ -662,7 +685,11 @@ function renderEmployeeDetail(id){
     <div class="card">
       ${txSorted.length===0?'<div class="empty">No records yet</div>':txSorted.map(t=>{
         let label='', amt='';
-        if(t.type==='attendance'){ label=`✓ Work Day — ${t.days} day(s)`; amt=fmt(t.days*l.emp.dailyWage); }
+        if(t.type==='attendance'){
+          if(t.customAmount!=null){ label = `✦ Partial (custom amount)`; amt = fmt(t.customAmount); }
+          else if(Number(t.days)===0){ label = '🚫 Leave (absent)'; amt = fmt(0); }
+          else { label = `✓ Work Day — ${t.days} day(s)`; amt = fmt(t.days*l.emp.dailyWage); }
+        }
         if(t.type==='advance'){ label=`Advance${t.note?' — '+t.note:''}`; amt=fmt(t.amount); }
         if(t.type==='payment'){ label=`Payment (${t.mode})`; amt=fmt(t.amount); }
         return `<div class="list-item">
@@ -720,7 +747,7 @@ function renderMonthlySummary(){
   const empRows = state.employees.map(e=>{
     const tx = state.salaryTx.filter(t=>t.empId===e.id && t.date.slice(0,7)===month);
     const days = tx.filter(t=>t.type==='attendance').reduce((s,t)=>s+Number(t.days),0);
-    const earned = days * Number(e.dailyWage);
+    const earned = tx.filter(t=>t.type==='attendance').reduce((s,t)=> s + (t.customAmount!=null ? Number(t.customAmount) : Number(t.days)*Number(e.dailyWage)), 0);
     const advGiven = tx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
     const paid = tx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
     const runningDue = employeeLedger(e.id).due;
