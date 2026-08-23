@@ -240,12 +240,33 @@
     <div class="card" id="sav-tx-list"></div>
   </div>
 
+  <!-- DAILY BOOK -->
+  <div class="view" id="view-dailybook">
+    <div class="section-title">Daily Book Status</div>
+    <div class="card">
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:10px;">Your own daily notebook total — separate from Employees/Savings. Just a simple running balance from what you write down each day.</div>
+      <div class="stat-row">
+        <div class="stat gold">
+          <div class="label">Current Balance</div>
+          <div class="value mono" id="db-balance">₹0</div>
+        </div>
+      </div>
+    </div>
+    <div class="row-btns">
+      <button class="btn gold" onclick="openSheet('dailyBook')">+ Today's Entry</button>
+      <button class="btn ghost" onclick="openSheet('dailyBookOpening')">Opening Balance</button>
+    </div>
+    <div class="section-title">Entries</div>
+    <div class="card" id="db-list"></div>
+  </div>
+
 </main>
 
 <nav class="tabs">
   <button class="tab-btn active" data-tab="home" onclick="switchTab('home')"><div class="dot"></div>Home</button>
   <button class="tab-btn" data-tab="employees" onclick="switchTab('employees')"><div class="dot"></div>Employees</button>
   <button class="tab-btn" data-tab="savings" onclick="switchTab('savings')"><div class="dot"></div>Savings</button>
+  <button class="tab-btn" data-tab="dailybook" onclick="switchTab('dailybook')"><div class="dot"></div>Daily Book</button>
 </nav>
 
 <div class="sheet-overlay" id="overlay" onclick="closeSheet()"></div>
@@ -371,8 +392,30 @@
   <input type="file" id="restore-file" accept="application/json" onchange="importBackup(event)">
 </div>
 
+<div class="sheet" id="sheet-dailyBook">
+  <button class="close" onclick="closeSheet()">×</button>
+  <h2>Daily Book Entry</h2>
+  <div id="db-edit-note" style="display:none;font-size:11.5px;color:var(--gold-deep);font-weight:700;margin-bottom:8px;">✎ Editing the existing entry for this date</div>
+  <label>Date</label>
+  <input id="db-date" type="date" onchange="loadExistingDailyBook()">
+  <label>Total In (₹)</label>
+  <input id="db-in" type="number" placeholder="0">
+  <label>Total Out (₹)</label>
+  <input id="db-out" type="number" placeholder="0">
+  <div style="font-size:11px;color:var(--ink-soft);margin:-2px 0 12px;">Saving again for a date you already entered updates that entry — no duplicates.</div>
+  <button class="btn gold block" onclick="submitDailyBook()">Save</button>
+</div>
+
+<div class="sheet" id="sheet-dailyBookOpening">
+  <button class="close" onclick="closeSheet()">×</button>
+  <h2>Daily Book — Opening Balance</h2>
+  <label>Opening Balance (₹)</label>
+  <input id="dbo-amt" type="number" placeholder="0">
+  <button class="btn gold block" onclick="submitDailyBookOpening()">Set</button>
+</div>
+
 <script>
-let state = { employees: [], salaryTx: [], savingsTx: [], budgetGoals: [] };
+let state = { employees: [], salaryTx: [], savingsTx: [], budgetGoals: [], dailyBook: [], dailyBookOpening: 0 };
 let activeEmployeeId = null;
 let savingsPillValue = 'deposit';
 
@@ -395,6 +438,8 @@ async function init(){
   state.salaryTx = await loadKey('salary_transactions', []);
   state.savingsTx = await loadKey('savings_transactions', []);
   state.budgetGoals = await loadKey('budget_goals', []);
+  state.dailyBook = await loadKey('daily_book', []);
+  state.dailyBookOpening = await loadKey('daily_book_opening', 0);
   renderAll();
 }
 
@@ -403,12 +448,13 @@ function switchTab(tab){
   document.getElementById('view-'+tab).classList.add('active');
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   if(tab==='employees'){ showEmployeeList(); }
+  if(tab==='dailybook'){ renderDailyBook(); }
 }
 
 function openSheet(name){
   document.getElementById('overlay').classList.add('active');
   document.getElementById('sheet-'+name).classList.add('active');
-  const dateFields = {dailyEntry:'de-date', advance:'av-date', payment:'pm-date', savings:'sv-date'};
+  const dateFields = {dailyEntry:'de-date', advance:'av-date', payment:'pm-date', savings:'sv-date', dailyBook:'db-date'};
   if(dateFields[name]) document.getElementById(dateFields[name]).value = todayStr();
   if(name==='budgetGoal') document.getElementById('bg-month').value = new Date().toISOString().slice(0,7);
   if(name==='monthlySummary'){
@@ -425,6 +471,13 @@ function openSheet(name){
   }
   if(['dailyEntry','advance','payment'].includes(name)){ populateEmployeeSelect(name); }
   if(name==='dailyEntry'){ loadExistingOrDefault(); }
+  if(name==='dailyBook'){
+    document.getElementById('db-in').value = '';
+    document.getElementById('db-out').value = '';
+    document.getElementById('db-edit-note').style.display = 'none';
+    loadExistingDailyBook();
+  }
+  if(name==='dailyBookOpening'){ document.getElementById('dbo-amt').value = state.dailyBookOpening || ''; }
 }
 function closeSheet(){
   document.getElementById('overlay').classList.remove('active');
@@ -607,11 +660,38 @@ function submitBudgetGoal(){
   closeSheet(); renderAll();
 }
 
+function loadExistingDailyBook(){
+  const date = document.getElementById('db-date').value;
+  const existing = state.dailyBook.find(e=>e.date===date);
+  document.getElementById('db-edit-note').style.display = existing ? 'block' : 'none';
+  document.getElementById('db-in').value = existing ? existing.in : '';
+  document.getElementById('db-out').value = existing ? existing.out : '';
+}
+function submitDailyBook(){
+  const date = document.getElementById('db-date').value;
+  const inAmt = Number(document.getElementById('db-in').value)||0;
+  const outAmt = Number(document.getElementById('db-out').value)||0;
+  if(!date){ alert('Please pick a date'); return; }
+  if(inAmt<=0 && outAmt<=0){ alert('Enter Total In or Total Out'); return; }
+  const idx = state.dailyBook.findIndex(e=>e.date===date);
+  if(idx>-1){ state.dailyBook[idx] = {...state.dailyBook[idx], date, in:inAmt, out:outAmt}; }
+  else{ state.dailyBook.push({id:uid(), date, in:inAmt, out:outAmt}); }
+  saveKey('daily_book', state.dailyBook);
+  closeSheet(); renderDailyBook();
+}
+function submitDailyBookOpening(){
+  const amt = Number(document.getElementById('dbo-amt').value)||0;
+  state.dailyBookOpening = amt;
+  saveKey('daily_book_opening', state.dailyBookOpening);
+  closeSheet(); renderDailyBook();
+}
+
 function deleteTx(kind, id){
   if(!confirm('Delete this entry?')) return;
   if(kind==='salary'){ state.salaryTx = state.salaryTx.filter(t=>t.id!==id); saveKey('salary_transactions', state.salaryTx); }
   if(kind==='savings'){ state.savingsTx = state.savingsTx.filter(t=>t.id!==id); saveKey('savings_transactions', state.savingsTx); }
   if(kind==='goal'){ state.budgetGoals = state.budgetGoals.filter(t=>t.id!==id); saveKey('budget_goals', state.budgetGoals); }
+  if(kind==='dailybook'){ state.dailyBook = state.dailyBook.filter(t=>t.id!==id); saveKey('daily_book', state.dailyBook); renderDailyBook(); }
   renderAll();
   if(kind==='salary' && activeEmployeeId){ renderEmployeeDetail(activeEmployeeId); }
 }
@@ -630,6 +710,7 @@ function renderAll(){
   renderHome();
   renderEmployeeList();
   renderSavings();
+  renderDailyBook();
 }
 function renderHome(){
   let totalDue = 0;
@@ -776,6 +857,29 @@ function renderSavings(){
   }
 }
 
+function renderDailyBook(){
+  const opening = state.dailyBookOpening || 0;
+  const sorted = [...state.dailyBook].sort((a,b)=>a.date.localeCompare(b.date));
+  let running = opening;
+  const withBal = sorted.map(e=>{ running += (e.in||0)-(e.out||0); return {...e, bal:running}; });
+  const balEl = document.getElementById('db-balance');
+  balEl.textContent = fmt(running);
+  balEl.style.color = running>=0 ? 'var(--sage-deep)' : 'var(--rust)';
+  const wrap = document.getElementById('db-list');
+  if(withBal.length===0){ wrap.innerHTML = '<div class="empty">No entries yet</div>'; return; }
+  wrap.innerHTML = [...withBal].reverse().map(e=>`
+    <div class="list-item">
+      <div>
+        <div class="name" style="font-size:13.5px;">${e.date}</div>
+        <div class="meta"><span style="color:var(--sage-deep)">+${fmt(e.in||0)}</span> &nbsp; <span style="color:var(--rust)">−${fmt(e.out||0)}</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="amt mono ${e.bal>=0?'ok':'due'}" style="font-size:13px;">${fmt(e.bal)}</div>
+        <button class="btn ghost sm" onclick="deleteTx('dailybook','${e.id}')">×</button>
+      </div>
+    </div>`).join('');
+}
+
 function renderMonthlySummary(){
   const month = document.getElementById('ms-month').value;
   const wrap = document.getElementById('ms-results');
@@ -843,7 +947,9 @@ function exportBackup(){
     employees: state.employees,
     salary_transactions: state.salaryTx,
     savings_transactions: state.savingsTx,
-    budget_goals: state.budgetGoals
+    budget_goals: state.budgetGoals,
+    daily_book: state.dailyBook,
+    daily_book_opening: state.dailyBookOpening
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -869,10 +975,14 @@ function importBackup(event){
       state.salaryTx = data.salary_transactions || [];
       state.savingsTx = data.savings_transactions || [];
       state.budgetGoals = data.budget_goals || [];
+      state.dailyBook = data.daily_book || [];
+      state.dailyBookOpening = data.daily_book_opening || 0;
       await saveKey('employees', state.employees);
       await saveKey('salary_transactions', state.salaryTx);
       await saveKey('savings_transactions', state.savingsTx);
       await saveKey('budget_goals', state.budgetGoals);
+      await saveKey('daily_book', state.dailyBook);
+      await saveKey('daily_book_opening', state.dailyBookOpening);
       closeSheet(); renderAll();
       alert('Restored successfully!');
     }catch(err){
