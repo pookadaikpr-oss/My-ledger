@@ -162,10 +162,17 @@
   .slip-table tfoot td{font-weight:700;background:var(--paper-deep);}
 
   @media print{
-    body *{visibility:hidden;}
-    #slip-content, #slip-content *{visibility:visible;}
-    #slip-content{position:absolute;left:0;top:0;width:100%;padding:10px;}
-    .sheet-overlay,.close,#print-slip-btn,nav.tabs{display:none !important;}
+    header.top, .stitch, main, nav.tabs, .sheet-overlay{display:none !important;}
+    .sheet{display:none !important;}
+    #sheet-employeeSlip{
+      display:block !important;
+      position:static !important;transform:none !important;
+      max-height:none !important;overflow:visible !important;
+      padding:0 !important;background:#fff !important;
+    }
+    html, body{height:auto !important;overflow:visible !important;padding:0 !important;margin:0 !important;}
+    #slip-content{padding:10px;}
+    .close, #print-slip-btn{display:none !important;}
   }
 </style>
 </head>
