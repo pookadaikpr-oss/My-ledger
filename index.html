@@ -155,6 +155,18 @@
     background:#fff;cursor:pointer;color:var(--ink-soft);
   }
   .pill.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .slip-table{width:100%;border-collapse:collapse;margin-top:10px;}
+  .slip-table th,.slip-table td{padding:6px 5px;font-size:12px;text-align:center;border-bottom:1px solid var(--line);}
+  .slip-table th{background:var(--ink);color:var(--paper);font-weight:600;}
+  .slip-table td:first-child,.slip-table th:first-child{text-align:left;}
+  .slip-table tfoot td{font-weight:700;background:var(--paper-deep);}
+
+  @media print{
+    body *{visibility:hidden;}
+    #slip-content, #slip-content *{visibility:visible;}
+    #slip-content{position:absolute;left:0;top:0;width:100%;padding:10px;}
+    .sheet-overlay,.close,#print-slip-btn,nav.tabs{display:none !important;}
+  }
 </style>
 </head>
 <body>
@@ -377,6 +389,12 @@
   <label>Month</label>
   <input id="ms-month" type="month" onchange="renderMonthlySummary()">
   <div id="ms-results"></div>
+</div>
+
+<div class="sheet" id="sheet-employeeSlip" style="max-height:92vh;">
+  <button class="close" onclick="closeSheet()">×</button>
+  <div id="slip-content"></div>
+  <button class="btn gold block" id="print-slip-btn" style="margin-top:14px;" onclick="window.print()">🖨️ Print / Save as PDF</button>
 </div>
 
 <div class="sheet" id="sheet-backup">
@@ -893,7 +911,7 @@ function renderMonthlySummary(){
     const advGiven = tx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
     const paid = tx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
     const runningDue = employeeLedger(e.id).due;
-    return {name:e.name, days, earned, advGiven, paid, runningDue};
+    return {id:e.id, name:e.name, days, earned, advGiven, paid, runningDue};
   });
 
   const totalEarned = empRows.reduce((s,r)=>s+r.earned,0);
@@ -918,7 +936,7 @@ function renderMonthlySummary(){
         <div class="stat rust"><div class="label">Advance Given</div><div class="value mono">${fmt(totalAdv)}</div></div>
       </div>
       ${empRows.length===0?'<div class="empty">No employees yet</div>':empRows.map(r=>`
-        <div class="list-item">
+        <div class="list-item" style="cursor:pointer" onclick="openEmployeeSlip('${r.id}')">
           <div><div class="name" style="font-size:13.5px;">${r.name}</div><div class="meta">${r.days} days this month • earned ${fmt(r.earned)}${r.advGiven>0?' • advance +'+fmt(r.advGiven):''}</div></div>
           <div style="text-align:right;">
             <div class="amt mono" style="font-size:13px;">${fmt(r.paid)} paid</div>
@@ -939,6 +957,65 @@ function renderMonthlySummary(){
       </div>
     </div>
   `;
+}
+
+function openEmployeeSlip(empId){
+  const month = document.getElementById('ms-month').value;
+  const emp = state.employees.find(e=>e.id===empId);
+  if(!emp || !month) return;
+
+  const tx = state.salaryTx.filter(t=>t.empId===empId && t.date.slice(0,7)===month);
+  const dates = [...new Set(tx.map(t=>t.date))].sort();
+
+  let monthEarned=0, monthPaid=0, monthAdv=0;
+  const rows = dates.map(date=>{
+    const dayTx = tx.filter(t=>t.date===date);
+    const att = dayTx.find(t=>t.type==='attendance');
+    const paid = dayTx.filter(t=>t.type==='payment').reduce((s,t)=>s+Number(t.amount),0);
+    const adv = dayTx.filter(t=>t.type==='advance').reduce((s,t)=>s+Number(t.amount),0);
+    const earned = att ? (att.customAmount!=null ? Number(att.customAmount) : Number(att.days)*Number(emp.dailyWage)) : 0;
+    const attLabel = !att ? '—' : (Number(att.days)===0 ? 'Leave' : `${att.days} day(s)`);
+    monthEarned += earned; monthPaid += paid; monthAdv += adv;
+    return {date, attLabel, earned, paid, adv};
+  });
+
+  const holdback = getHoldback(emp);
+  const runningDue = employeeLedger(empId).due;
+  const todayStr2 = new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
+
+  const content = document.getElementById('slip-content');
+  content.innerHTML = `
+    <h2 style="margin:0 0 2px;">${emp.name}</h2>
+    <div style="font-size:12px;color:var(--ink-soft);margin-bottom:4px;">${month} — Salary Slip</div>
+    <div style="font-size:11px;color:var(--ink-soft);margin-bottom:12px;">₹${emp.dailyWage}/day wage • holdback ${fmt(holdback)} • generated ${todayStr2}</div>
+
+    <div class="stat-row">
+      <div class="stat gold"><div class="label">Total Earned</div><div class="value mono">${fmt(monthEarned)}</div></div>
+      <div class="stat"><div class="label">Total Paid</div><div class="value mono">${fmt(monthPaid)}</div></div>
+    </div>
+    <div class="stat-row" style="margin-top:8px;">
+      <div class="stat rust"><div class="label">Advance This Month</div><div class="value mono">${fmt(monthAdv)}</div></div>
+      <div class="stat ${runningDue>0?'rust':'sage'}"><div class="label">Running Due (all-time)</div><div class="value mono">${fmt(runningDue)}</div></div>
+    </div>
+
+    <table class="slip-table">
+      <thead><tr><th>Date</th><th>Attendance</th><th>Earned</th><th>Paid</th><th>Advance</th></tr></thead>
+      <tbody>
+        ${rows.length===0?'<tr><td colspan="5" style="text-align:center;color:var(--ink-soft);">No entries this month</td></tr>':rows.map(r=>`
+          <tr>
+            <td>${r.date}</td>
+            <td>${r.attLabel}</td>
+            <td class="mono">${r.earned?fmt(r.earned):''}</td>
+            <td class="mono">${r.paid?fmt(r.paid):''}</td>
+            <td class="mono">${r.adv?fmt(r.adv):''}</td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr><td colspan="2">Total</td><td class="mono">${fmt(monthEarned)}</td><td class="mono">${fmt(monthPaid)}</td><td class="mono">${fmt(monthAdv)}</td></tr>
+      </tfoot>
+    </table>
+  `;
+  openSheet('employeeSlip');
 }
 
 function exportBackup(){
